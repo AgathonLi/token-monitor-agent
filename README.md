@@ -59,7 +59,7 @@ Then fill in:
 docker compose -f compose/docker-compose.agent.yaml up -d
 ```
 
-The image already collects Hermes (`TOKEN_MONITOR_CLIENTS=hermes`) with Limits off. Hermes reports token usage; quota cards still come from the desktop widget.
+The image already collects Hermes (`TOKEN_MONITOR_CLIENTS=hermes`) with Limits off. Hermes reports token usage. Quota cards are the same Limits probes as the official agent — leave them off until you opt in below.
 
 ## Volumes
 
@@ -67,9 +67,28 @@ SQLite needs a writable mount so WAL and `-shm` files can be created. Give the a
 
 `compose/docker-compose.agent.yaml` is a starting point: point the bind at your Hermes data dir and pin the image version tag.
 
+## Limits
+
+This image runs the official headless agent, so Limits probing is in the binary. The overlay default is `TOKEN_MONITOR_LIMITS_ENABLED=0` because Hermes has no Limits provider — collecting `$HERMES_HOME/state.db` fills **token** totals only.
+
+A 24/7 container is a good Limits clock for **static API keys** (OpenRouter, DeepSeek, Minimax Token Plan, Volcengine, GLM / Z.ai, Kimi Code, Copilot token, `GROK_BEARER_TOKEN`). Cookie, CLI, and desktop-login providers (Claude/Codex CLI, Cursor, Antigravity, Trae, Alibaba, Ollama, Qoder, Zed, Command Code, WorkBuddy on Linux) stay on the widget.
+
+Hub Limits keep the freshest **valid** row per account (usage **adds**). Allowlist providers, put their keys in the host `.env`, and turn the same ones off on the widget.
+
+```env
+TOKEN_MONITOR_LIMITS_ENABLED=1
+TOKEN_MONITOR_LIMIT_PROVIDERS=openrouter,deepseek,minimax,volcengine,zai,kimi
+OPENROUTER_API_KEY=
+DEEPSEEK_API_KEY=
+```
+
+Commented copy with more keys is in `.env.example`. The complete list lives in Token Monitor’s [`.env.example`](https://github.com/Javis603/token-monitor/blob/main/.env.example).
+
 ## Configuration
 
-Copy `.env.example` next to the compose file. Precedence matches upstream: CLI flag → env → image default. The full variable list is in Token Monitor’s [configuration reference](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md).
+Copy `.env.example` next to the compose file. Precedence matches upstream: CLI flag → env → image default.
+
+If the host cannot reach the Hub on the default route, set `HTTP_PROXY` / `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node `fetch` ignores proxy env without that flag). The full variable list is in Token Monitor’s [configuration reference](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md).
 
 ## Acknowledgments
 

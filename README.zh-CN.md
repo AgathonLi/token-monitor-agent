@@ -59,7 +59,7 @@ cp .env.example .env
 docker compose -f compose/docker-compose.agent.yaml up -d
 ```
 
-镜像默认采集 Hermes（`TOKEN_MONITOR_CLIENTS=hermes`），Limits 关闭。Hermes 只上报 Token 用量；额度卡片仍由桌面小部件提供。
+镜像默认采集 Hermes（`TOKEN_MONITOR_CLIENTS=hermes`），Limits 关闭。Hermes 只上报 Token 用量。额度卡片用的是和官方 agent 同一套 Limits 探针——默认关掉，要开再按下节配置。
 
 ## 数据卷
 
@@ -67,9 +67,28 @@ SQLite 需要可写挂载，才能创建 WAL 和 `-shm`。pid 与归档请放到
 
 `compose/docker-compose.agent.yaml` 是起点：把 bind 指到 Hermes 数据目录，并钉住镜像的版本标签。
 
+## 额度（Limits）
+
+镜像跑的就是官方无头采集器，Limits 探针都在。包装层默认 `TOKEN_MONITOR_LIMITS_ENABLED=0`：Hermes 没有 Limits 提供方，采集 `$HERMES_HOME/state.db` 只填 **Token 用量**。
+
+24/7 容器适合用 **静态 API key** 去刷额度（OpenRouter、DeepSeek、Minimax Token Plan、Volcengine、GLM / Z.ai、Kimi Code、Copilot token、`GROK_BEARER_TOKEN`）。Cookie、CLI、桌面登录类（Claude/Codex CLI、Cursor、Antigravity、Trae、Alibaba、Ollama、Qoder、Zed、Command Code，以及 Linux 上的 WorkBuddy）留在小部件。
+
+Hub 对额度按账号保留最新一条有效记录（用量是加总）。请 allowlist 提供方、把 key 放进宿主机 `.env`，并在小部件里关掉同样的项。
+
+```env
+TOKEN_MONITOR_LIMITS_ENABLED=1
+TOKEN_MONITOR_LIMIT_PROVIDERS=openrouter,deepseek,minimax,volcengine,zai,kimi
+OPENROUTER_API_KEY=
+DEEPSEEK_API_KEY=
+```
+
+更多 key 的注释示例在 `.env.example`。完整列表见 Token Monitor 的 [`.env.example`](https://github.com/Javis603/token-monitor/blob/main/.env.example)。
+
 ## 配置
 
-把 `.env.example` 复制到 compose 旁边。优先级与上游一致：命令行参数 → 环境变量 → 镜像默认。完整变量列表见 Token Monitor 的[设置参考](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md)。
+把 `.env.example` 复制到 compose 旁边。优先级与上游一致：命令行参数 → 环境变量 → 镜像默认。
+
+若主机默认路由到不了 Hub，设置 `HTTP_PROXY` / `HTTPS_PROXY`，并加上 `NODE_USE_ENV_PROXY=1`（没有这面旗，Node 的 `fetch` 不走代理）。完整变量列表见 Token Monitor 的[设置参考](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md)。
 
 ## 致谢
 
