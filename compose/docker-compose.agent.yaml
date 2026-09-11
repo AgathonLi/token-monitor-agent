@@ -1,0 +1,24 @@
+# Example overlay compose — not a NAS/Feiniu deploy file and not official Token Monitor.
+# Pin an upstream version tag (vX.Y.Z). Do not use :latest on a machine you care about.
+# Hermes SQLite must be a read-write bind as uid 1000. WAL/-shm fail on :ro.
+# Keep TOKEN_MONITOR_SHARED_DIR on its own volume so pid/archive do not sit next to state.db.
+
+services:
+  token-monitor-agent:
+    image: ghcr.io/agathonli/token-monitor-agent:v0.56.0
+    user: "1000:1000"
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HERMES_HOME: /opt/data
+      TOKEN_MONITOR_CLIENTS: hermes
+      TOKEN_MONITOR_LIMITS_ENABLED: "0"
+      TOKEN_MONITOR_SHARED_DIR: /var/lib/token-monitor-agent
+    volumes:
+      # Host directory that contains Hermes state.db (and -wal/-shm). Must be rw.
+      - /path/to/hermes-data:/opt/data:rw
+      - token-monitor-agent-shared:/var/lib/token-monitor-agent:rw
+
+volumes:
+  token-monitor-agent-shared:

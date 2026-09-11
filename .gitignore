@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+agent.env
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo

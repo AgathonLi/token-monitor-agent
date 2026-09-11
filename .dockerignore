@@ -1,0 +1,11 @@
+.git
+.github
+compose
+*.md
+LICENSE
+.env
+.env.*
+!.env.example
+**/.DS_Store
+.gitattributes
+.gitignore

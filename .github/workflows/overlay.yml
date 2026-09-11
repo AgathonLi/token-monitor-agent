@@ -1,0 +1,115 @@
+name: overlay
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - upstream.lock.json
+      - .github/workflows/overlay.yml
+      - .github/scripts/sync_upstream.py
+  workflow_dispatch:
+    inputs:
+      skip_sync:
+        description: Skip polling official Releases (rebuild current lock)
+        type: boolean
+        default: false
+
+concurrency:
+  group: overlay
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync official stable Release
+        id: sync
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.skip_sync != true)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 .github/scripts/sync_upstream.py
+
+      - name: Read lock
+        id: lock
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          lock = json.loads(pathlib.Path("upstream.lock.json").read_text(encoding="utf-8"))
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"tag={lock['tag']}\n")
+              handle.write(f"commit={lock['commit']}\n")
+              handle.write(f"overlay_sha={sha}\n")
+          PY
+
+      - name: Decide build
+        id: decide
+        run: |
+          event="${{ github.event_name }}"
+          changed="${{ steps.sync.outputs.changed }}"
+          if [ "$event" = "push" ] || [ "$event" = "workflow_dispatch" ] || [ "$changed" = "true" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up buildx
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push linux/amd64
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ghcr.io/agathonli/token-monitor-agent:${{ steps.lock.outputs.tag }}
+            ghcr.io/agathonli/token-monitor-agent:latest
+            ghcr.io/agathonli/token-monitor-agent:overlay-${{ steps.lock.outputs.overlay_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/AgathonLi/token-monitor-agent
+            org.opencontainers.image.revision=${{ steps.lock.outputs.overlay_sha }}
+            org.opencontainers.image.version=${{ steps.lock.outputs.tag }}
+            org.opencontainers.image.title=token-monitor-agent
+            org.opencontainers.image.description=Unofficial Token Monitor headless-agent overlay. Not affiliated with Javis603/token-monitor.
+            org.opencontainers.image.licenses=MIT
+
+      - name: Public GHCR package
+        if: steps.decide.outputs.build == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user/packages/container/token-monitor-agent/visibility \
+            -d '{"visibility":"public"}'
