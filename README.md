@@ -59,7 +59,7 @@ Then fill in:
 docker compose -f compose/docker-compose.agent.yaml up -d
 ```
 
-The image already collects Hermes (`TOKEN_MONITOR_CLIENTS=hermes`) with Limits off. Hermes reports token usage. Quota cards are the same Limits probes as the official agent — leave them off until you opt in below.
+The image already collects Hermes (`TOKEN_MONITOR_CLIENTS=hermes`) with Limits off. It disables file-triggered collection and posts every five minutes by default, avoiding a Hub request for every SQLite filesystem event. Hermes reports token usage. Quota cards are the same Limits probes as the official agent — leave them off until you opt in below.
 
 ## Volumes
 
@@ -87,6 +87,8 @@ Commented copy with more keys is in `.env.example`. The complete list lives in T
 ## Configuration
 
 Copy `.env.example` next to the compose file. Precedence matches upstream: CLI flag → env → image default.
+
+The image defaults to periodic collection with `TOKEN_MONITOR_WATCH=0` and `TOKEN_MONITOR_INTERVAL_MS=300000`. For seconds-level freshness you can opt in with `TOKEN_MONITOR_WATCH=1`; `TOKEN_MONITOR_WATCH_POLLING=1` only selects a polling watcher and does not cap Hub uploads, so an active SQLite database can generate one request per filesystem event.
 
 If the host cannot reach the Hub on the default route, set `HTTP_PROXY` / `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node `fetch` ignores proxy env without that flag). The full variable list is in Token Monitor’s [configuration reference](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md).
 

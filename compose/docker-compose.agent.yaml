@@ -14,6 +14,8 @@ services:
       HERMES_HOME: /opt/data
       TOKEN_MONITOR_CLIENTS: hermes
       TOKEN_MONITOR_LIMITS_ENABLED: "0"
+      TOKEN_MONITOR_WATCH: "${TOKEN_MONITOR_WATCH:-0}"
+      TOKEN_MONITOR_INTERVAL_MS: "${TOKEN_MONITOR_INTERVAL_MS:-300000}"
       TOKEN_MONITOR_SHARED_DIR: /var/lib/token-monitor-agent
     volumes:
       # Host directory that contains Hermes state.db (and -wal/-shm). Must be rw.

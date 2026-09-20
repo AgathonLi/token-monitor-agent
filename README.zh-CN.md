@@ -59,7 +59,7 @@ cp .env.example .env
 docker compose -f compose/docker-compose.agent.yaml up -d
 ```
 
-镜像默认采集 Hermes（`TOKEN_MONITOR_CLIENTS=hermes`），Limits 关闭。Hermes 只上报 Token 用量。额度卡片用的是和官方 agent 同一套 Limits 探针——默认关掉，要开再按下节配置。
+镜像默认采集 Hermes（`TOKEN_MONITOR_CLIENTS=hermes`），Limits 关闭；同时关闭文件事件触发，默认每五分钟提交一次，避免 SQLite 每次文件变化都产生 Hub 请求。Hermes 只上报 Token 用量。额度卡片用的是和官方 agent 同一套 Limits 探针——默认关掉，要开再按下节配置。
 
 ## 数据卷
 
@@ -87,6 +87,8 @@ DEEPSEEK_API_KEY=
 ## 配置
 
 把 `.env.example` 复制到 compose 旁边。优先级与上游一致：命令行参数 → 环境变量 → 镜像默认。
+
+镜像默认按周期采集：`TOKEN_MONITOR_WATCH=0`、`TOKEN_MONITOR_INTERVAL_MS=300000`。若确实需要秒级更新，可以自行改为 `TOKEN_MONITOR_WATCH=1`；`TOKEN_MONITOR_WATCH_POLLING=1` 只是在轮询方式下监听文件，并不会限制 Hub 上传频率，活跃的 SQLite 数据库可能每次文件变化都产生一次请求。
 
 若主机默认路由到不了 Hub，设置 `HTTP_PROXY` / `HTTPS_PROXY`，并加上 `NODE_USE_ENV_PROXY=1`（没有这面旗，Node 的 `fetch` 不走代理）。完整变量列表见 Token Monitor 的[设置参考](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md)。
 
