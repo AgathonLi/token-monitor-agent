@@ -17,6 +17,7 @@ ENV NODE_ENV=production \
     GIT_TERMINAL_PROMPT=0 \
     TOKEN_MONITOR_CLIENTS=hermes \
     TOKEN_MONITOR_LIMITS_ENABLED=0 \
+    TOKEN_MONITOR_SYNC_SESSION_TITLES=0 \
     TOKEN_MONITOR_WATCH=0 \
     TOKEN_MONITOR_INTERVAL_MS=300000 \
     TOKEN_MONITOR_SHARED_DIR=/var/lib/token-monitor-agent \
@@ -24,7 +25,7 @@ ENV NODE_ENV=production \
 
 RUN set -eu; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates git; \
+    apt-get install -y --no-install-recommends ca-certificates git tzdata; \
     tag="$(node -p "require('/tmp/upstream.lock.json').tag")"; \
     commit="$(node -p "require('/tmp/upstream.lock.json').commit")"; \
     source="$(node -p "require('/tmp/upstream.lock.json').source")"; \

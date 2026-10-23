@@ -10,7 +10,11 @@ on:
       - .dockerignore
       - upstream.lock.json
       - .github/workflows/overlay.yml
-      - .github/scripts/sync_upstream.py
+      - .github/scripts/**
+      - tests/**
+      - compose/**
+      - .env.example
+
   workflow_dispatch:
     inputs:
       skip_sync:
@@ -29,9 +33,14 @@ permissions:
 jobs:
   overlay:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Run unit tests
+        run: |
+          python3 -m unittest discover -s tests -v
 
       - name: Sync official stable Release
         id: sync
@@ -56,43 +65,38 @@ jobs:
               handle.write(f"overlay_sha={sha}\n")
           PY
 
-      - name: Decide build
-        id: decide
-        run: |
-          event="${{ github.event_name }}"
-          changed="${{ steps.sync.outputs.changed }}"
-          if [ "$event" = "push" ] || [ "$event" = "workflow_dispatch" ] || [ "$changed" = "true" ]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set up buildx
-        if: steps.decide.outputs.build == 'true'
-        uses: docker/setup-buildx-action@v3
-
       - name: Log in to GHCR
-        if: steps.decide.outputs.build == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push linux/amd64
+      - name: Decide build
+        id: decide
+        run: |
+          python3 .github/scripts/check_tags.py decide \
+            --repo ghcr.io/agathonli/token-monitor-agent \
+            --tags "${{ steps.lock.outputs.tag }}" latest "overlay-${{ steps.lock.outputs.overlay_sha }}" \
+            --event "${{ github.event_name }}" \
+            --changed "${{ steps.sync.outputs.changed }}"
+
+      - name: Set up buildx
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build linux/amd64 (local load)
         if: steps.decide.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           platforms: linux/amd64
-          push: true
+          load: true
+          push: false
           provenance: false
           sbom: false
-          tags: |
-            ghcr.io/agathonli/token-monitor-agent:${{ steps.lock.outputs.tag }}
-            ghcr.io/agathonli/token-monitor-agent:latest
-            ghcr.io/agathonli/token-monitor-agent:overlay-${{ steps.lock.outputs.overlay_sha }}
+          tags: token-monitor-agent:smoke
           labels: |
             org.opencontainers.image.source=https://github.com/AgathonLi/token-monitor-agent
             org.opencontainers.image.revision=${{ steps.lock.outputs.overlay_sha }}
@@ -100,6 +104,33 @@ jobs:
             org.opencontainers.image.title=token-monitor-agent
             org.opencontainers.image.description=Unofficial Token Monitor headless-agent overlay. Not affiliated with Javis603/token-monitor.
             org.opencontainers.image.licenses=MIT
+
+      - name: Smoke test image
+        if: steps.decide.outputs.build == 'true'
+        run: |
+          python3 .github/scripts/smoke_image.py token-monitor-agent:smoke
+
+      - name: Tag and push to GHCR
+        if: steps.decide.outputs.build == 'true'
+        run: |
+          repo="ghcr.io/agathonli/token-monitor-agent"
+          tag="${{ steps.lock.outputs.tag }}"
+          sha="${{ steps.lock.outputs.overlay_sha }}"
+          docker tag token-monitor-agent:smoke "${repo}:${tag}"
+          docker push "${repo}:${tag}"
+          docker tag token-monitor-agent:smoke "${repo}:latest"
+          docker push "${repo}:latest"
+          docker tag token-monitor-agent:smoke "${repo}:overlay-${sha}"
+          docker push "${repo}:overlay-${sha}"
+
+      - name: Verify published tags
+        if: steps.decide.outputs.build == 'true'
+        run: |
+          expected="$(docker image inspect token-monitor-agent:smoke --format '{{.Id}}')"
+          python3 .github/scripts/check_tags.py verify \
+            --repo ghcr.io/agathonli/token-monitor-agent \
+            --tags "${{ steps.lock.outputs.tag }}" latest "overlay-${{ steps.lock.outputs.overlay_sha }}" \
+            --expected-digest "$expected"
 
       - name: Public GHCR package
         if: steps.decide.outputs.build == 'true'
