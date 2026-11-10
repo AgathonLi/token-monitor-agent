@@ -42,6 +42,10 @@ Check `upstream.lock.json` for the current build pin. A compose deployment pin i
 
 ## Quick start
 
+This is a **first-deployment** walkthrough for a machine that has no agent yet. If you already run one, keep your own files and do not re-copy the template over your live configuration.
+
+Prerequisites: a **linux/amd64** host with Docker and the `docker compose` plugin, and a Hub that is already up and reachable (the same one your widget uses). The image is prebuilt — running it needs no Node/npm on the host.
+
 ```bash
 git clone https://github.com/AgathonLi/token-monitor-agent.git
 cd token-monitor-agent
@@ -59,7 +63,12 @@ Then fill in `compose/.env`:
 | `TZ` | Timezone where Hermes writes logs, e.g. `Asia/Shanghai` (defaults to `UTC`) |
 | Compose volume | Hermes home directory holding `state.db`, profiles, and `logs/agent.log*`, mounted **rw** as uid `1000` |
 
+Next, edit `compose/docker-compose.agent.yaml`: replace `/path/to/hermes-data` with the real full Hermes home directory, and confirm the pinned image tag, the `rw` mounts (the Hermes data mount and the separate shared volume), the `1000:1000` user, and the dedicated `token-monitor-agent-shared` volume.
+
+Validate before starting, with exactly the same `--env-file`/`-f` arguments as the start command so validation and startup read the same configuration; `config --quiet` simply omits the rendered output — it is quiet output mode, not a promise that secrets can never appear. The `&&` keeps startup from proceeding after a failed check:
+
 ```bash
+docker compose --env-file compose/.env -f compose/docker-compose.agent.yaml config --quiet && \
 docker compose --env-file compose/.env -f compose/docker-compose.agent.yaml up -d
 ```
 
@@ -94,21 +103,71 @@ Commented copy with more keys is in `.env.example`. The complete list lives in T
 
 ## Configuration
 
-Copy `.env.example` to `compose/.env` next to the compose file. Precedence matches upstream: CLI flag → env → image default.
+Copy `.env.example` to `compose/.env` next to the compose file (first deployment only). Keep the explicit `--env-file compose/.env` argument in every compose command. Two precedence chains apply, and they are independent:
+
+- **The agent**: CLI flag → container environment → image default. Values from `compose/.env` reach the agent as its container environment.
+- **Compose ingestion**: `${...}` placeholders in the compose file resolve from the shell environment, the project `.env`, or `--env-file`; the service's `env_file` list does not feed Compose interpolation, and inside a service `environment` overrides `env_file`.
+
+Configuration links point at upstream `main`, which may be ahead of the stable release your image packages; when versions differ, follow the documentation matching the deployed image version.
 
 - **Timezone**: Set `TZ` in `compose/.env` (e.g. `TZ=Asia/Shanghai`, default `UTC`) to match the timezone where Hermes writes logs. The log parser interprets wall-clock log timestamps in that timezone, and the collector explicitly passes its system timezone to Tokscale for usage periods and daily graphs. Set it before starting the service and recreate the container after changing `TZ`; changing the dashboard timezone cannot correct the device's buckets. The collector performs a full rescan when it observes a new timezone and retains daily history separately by timezone. Previously saved history is preserved as recorded, not automatically repaired.
 - **Collection cadence**: The image defaults to periodic collection with `TOKEN_MONITOR_WATCH=0` and `TOKEN_MONITOR_INTERVAL_MS=300000` (five-minute usage upload cadence). For seconds-level freshness you can opt in with `TOKEN_MONITOR_WATCH=1`; `TOKEN_MONITOR_WATCH_POLLING=1` only selects a polling watcher and does not cap Hub uploads, so an active SQLite database can generate one request per filesystem event.
-- **Session titles**: `TOKEN_MONITOR_SYNC_SESSION_TITLES=0` keeps title sync off by default. A newer Hub caches OFF for the process lifetime; an older Hub without capability endpoints still completes usage sync but may repeat capability GET checks.
-- **Outbound proxy**: If the host cannot reach the Hub on the default route, set `HTTP_PROXY` / `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node `fetch` ignores proxy env without that flag). The full variable list is in Token Monitor’s [configuration reference](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md).
+- **Session titles**: `TOKEN_MONITOR_SYNC_SESSION_TITLES=0` (the default) does not upload session titles. Usage, cost, model and day/month statistics continue to sync normally, so this is not a full anonymity switch; it does not affect the titles shown locally in Hermes, and it is not a switch for uploading chat bodies. Titles can expose project or customer information, so keep `0` unless you specifically want title sync. `1` is a sender-side opt-in that additionally requires the Hub to support and accept titles, and the display side to support them too. If titles were once enabled and are now turned off, disabling requests cleanup of the server-side titles: if that request fails, retry while keeping the shared state; copies or backups already exported earlier cannot be revoked. After a confirmed OFF negotiation, the OFF result is cached by the **agent negotiator** (not the Hub) and reused without re-asking each upload; an older Hub without capability endpoints still lets basic usage sync through, but the agent may repeat a capability GET probe every round.
+- **Outbound proxy**: If the host cannot reach the Hub on the default route, set `HTTP_PROXY` / `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node `fetch` ignores proxy env without that flag). These variables are honored by HTTP clients inside the agent container — Hub requests among them, and possibly other API traffic — and do not configure the Docker daemon's network, so image pulls still go through the daemon's own routing layer; do not adjust Hermes, DNS, the Hub, or TLS trying to fix one with the other. The full variable list is in Token Monitor’s [configuration reference](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md).
+- **Recreating after changes**: editing an env value requires recreating the service (`up -d` again); a plain `restart` reads neither new env values nor a new image.
+
+## Version pinning, upgrade and rollback
+
+- Tags are not exact artifacts. A `vX.Y.Z` tag can be rebuilt for same-version packaging revisions, and an `overlay-<sha>` tag — which identifies one source revision by its full wrapped commit SHA — is still only a tag. Pin a deployment with the real registry manifest digest of the selected artifact (`image: ghcr.io/agathonli/token-monitor-agent@sha256:...`; the `sha256:...` here is a format placeholder, never a digest to adopt as a permanent default).
+- The OCI config digest (the Docker image ID a local `docker image inspect` prints) and the registry manifest digest referenced by an `image@sha256` pin are two different fingerprints; never treat a local image ID as the deployed manifest digest, and an `image@sha256` deployment is exact only when the digest is the selected artifact's registry manifest digest.
+- A portable upgrade checklist (the example in this repo is service `token-monitor-agent` in `compose/docker-compose.agent.yaml`; an existing custom deployment keeps its **real** project name, config paths, and interpolation env):
+  1. Record the running project, service, device ID, and volumes (`docker inspect`), and keep a local reference to the actual old image.
+  2. Pull the selected new image (e.g. `docker pull ghcr.io/agathonli/token-monitor-agent:vX.Y.Z`) before stopping the old agent to shorten downtime. Pulling runs through the Docker daemon's own routing, not the agent's `HTTP_PROXY`.
+  3. Stop the agent container only — Hermes itself does not need to stop; never copy a live SQLite file, and back up `TOKEN_MONITOR_SHARED_DIR` only after the agent is stopped. First, before touching any file, back up the original compose file and the env file holding the secrets into a directory outside the Hermes home and shared volumes and outside any synced folder, keeping the env-file copy at `0600`.
+  4. Update only the image (and necessary settings), then recreate the original service keeping the original shared volume. Reusing the same `TOKEN_MONITOR_DEVICE_ID` avoids a duplicate device:
+
+     ```bash
+     docker compose --env-file compose/.env -f compose/docker-compose.agent.yaml up -d --no-deps --force-recreate token-monitor-agent
+     ```
+
+     The command above matches this repo's example files and service; a custom deployment keeps its real project name, real file paths, and its own interpolation arguments.
+  5. On failure: stop the new agent first, then — if needed — restore the shared volume from its backup; restore the original config and the actual old image (a moving remote tag is not a rollback). Rerun `config --quiet` with the original arguments, recreate the original service the same way, and repeat the post-deployment checks — a passing validation alone is not a completed rollback.
+- Never as upgrade steps: `down -v`, wiping all volumes, or deleting data directories — those lose collector history and cannot be undone.
+
+## Post-deployment checks
+
+After `up -d`, verify on the host (logs and inspect output may contain your private Hub address — view them locally, share only desensitized lines, and never paste a container's full `Config.Env` or a rendered compose config, which can carry the secret):
+
+- Container identity: use the same `--env-file`/`-f` arguments as startup (and the original project name and paths for a custom deployment). The chain below stops if no running container ID is returned or any command fails. It prints only the actual image ID/reference, configured user, mount destinations/`RW`, and the running process's uid/gid and timezone — not the full environment:
+
+```bash
+CID=$(docker compose --env-file compose/.env -f compose/docker-compose.agent.yaml ps -q token-monitor-agent) &&
+test -n "$CID" &&
+docker inspect --type container --format 'ImageId={{.Image}} ImageRef={{.Config.Image}} User={{.Config.User}} {{range .Mounts}}{{.Destination}}={{.RW}} {{end}}' "$CID" &&
+docker exec "$CID" node -e 'console.log(process.getuid(), process.getgid(), process.env.TZ, Intl.DateTimeFormat().resolvedOptions().timeZone)'
+```
+
+  Confirm uid/gid `1000/1000`, the intended timezone, and both `rw` mounts (`/opt/data` and the shared dir). Compare `ImageId` with the local image ID of the already-pulled target; `ImageRef` alone can be a moving tag. A locally present image is not proof of what actually runs.
+- Agent logs: the same device ID reports to the Hub and usage uploads succeed — judge by successful upload log lines, not merely by the container staying up.
+- Then read the Hub back (widget or Token Monitor Web / dashboard): the device's last-update time refreshes, the usage summary appears, and the device is not listed twice. Successful upload log lines and a running container do not substitute for the receiving side showing the data.
+- First startup may rescan a large `state.db` in full; that can take a while depending on database size, and no fixed duration is promised.
+
+When something fails, check in different directions:
+
+- `fetch failed` / Hub unreachable → the agent's `HTTP_PROXY` / `HTTPS_PROXY` / `NODE_USE_ENV_PROXY` settings and outbound reachability; image pulling is a separate daemon-level path.
+- `401` / rejected uploads → `TOKEN_MONITOR_SECRET` mismatch with the Hub, or a wrong `TOKEN_MONITOR_HUB_URL`.
+- SQLite errors / permission denied on `/opt/data` → the mount must be `rw`, and files must be readable/writable by uid `1000`.
+- Scan timeouts on very large databases → `TOKEN_MONITOR_TOKSCALE_TIMEOUT_MS` exists (the `180000` in `.env.example` is an example value, not a universal image default).
 
 ## Verification and Maintenance
 
 - **Stable-only releases**: This overlay packages official stable Releases from `Javis603/token-monitor` tracked in `upstream.lock.json`. It does not follow unreleased `main` or prereleases. `npm ci` preserves upstream's locked dependencies; rebuilding the same release does not pick up newer dependency security fixes. Follow the next fixed stable release, or review an exception separately.
 - **Local build and smoke test**:
   1. Build the image locally: `docker buildx build --platform linux/amd64 --load -t token-monitor-agent:local .`
-  2. Run `python3 .github/scripts/smoke_image.py token-monitor-agent:local`. It uses synthetic SQLite data with no network access to check the real agent, token buckets, profile discovery, and daily attribution. A separate fixed-clock probe exercises the image's collector persistence, restart reuse, and retained timezone calendars with injected scanner results. CI runs this gate before publishing.
+  2. Run `python3 .github/scripts/smoke_image.py token-monitor-agent:local`. It uses synthetic SQLite data with no network access to check the real agent, token buckets, profile discovery, and daily attribution. A separate fixed-clock probe exercises the image's collector persistence, restart reuse, and retained timezone calendars with injected scanner results. CI runs this gate before publishing. Passing this gate proves the image's behavior on synthetic data — it is not a pass on your own machine.
 - **Registry verification**:
   Automated checks confirm that the registry (GHCR) publishes all three tags (`vX.Y.Z`, `latest`, `overlay-<sha>`) and verify that all three tags resolve to the same image artifact. If tags are missing or inconsistent, publication is retried.
+- **Publishing**: a push that touches the build inputs (`Dockerfile`, `upstream.lock.json`, `compose/**`, tests, `.env.example`) triggers the overlay workflow to build and publish automatically; a README-only push does not trigger a build.
 
 ## Acknowledgments
 
