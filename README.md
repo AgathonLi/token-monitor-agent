@@ -34,7 +34,7 @@ The Dockerfile shallow-clones `Javis603/token-monitor` at the tag in `upstream.l
 
 | Tag | Meaning |
 |---|---|
-| `v0.77.0` | Example upstream version — pin a verified release in compose |
+| `v0.89.0` | Example upstream version — pin a verified release in compose |
 | `latest` | Newest stable release built by this overlay |
 | `overlay-<sha>` | Git commit of this packaging repo |
 
@@ -73,13 +73,13 @@ SQLite needs a writable mount so WAL and `-shm` files can be created. Mount the 
 
 Newer Tokscale / Token Monitor parsers split multi-day session usage across dates using API-call entries in `logs/agent.log*` located alongside each database (`$HERMES_HOME/state.db` as well as profile databases in `$HERMES_HOME/profiles/*/state.db`). The database remains the authoritative total: only the log-covered portion is split across call dates. Any unlogged remainder falls back to `started_at`, and an over-reporting log causes fallback to the database total. This improves attribution across midnight boundaries, but does not promise complete retrospective repair.
 
-Keep `TOKEN_MONITOR_SHARED_DIR` on its own independent rw volume (e.g. `/var/lib/token-monitor-agent`) so agent pid, lock, and archive files do not sit in the Hermes data directory.
+Keep `TOKEN_MONITOR_SHARED_DIR` on its own independent rw volume (e.g. `/var/lib/token-monitor-agent`) so agent pid, lock, and archive files do not sit in the Hermes data directory. Retain this volume across upgrades and timezone changes so the collector can reuse its saved history.
 
 ## Limits
 
 This image runs the official headless agent, so Limits probing is in the binary. The overlay default is `TOKEN_MONITOR_LIMITS_ENABLED=0` because Hermes has no Limits provider — collecting `$HERMES_HOME/state.db` fills **token** totals only.
 
-A 24/7 container is a good Limits clock for **static API keys** (OpenRouter, DeepSeek, Minimax Token Plan, Volcengine, GLM / Z.ai, Kimi Code, Copilot token, `GROK_BEARER_TOKEN`). Cookie, CLI, and desktop-login providers (Claude/Codex CLI, Cursor, Antigravity, Trae, Alibaba, Ollama, Qoder, Zed, Command Code, WorkBuddy on Linux) stay on the widget.
+A 24/7 container is a good Limits clock for **static API keys** (OpenRouter, DeepSeek, Minimax Token Plan, Volcengine, GLM / Z.ai, Kimi Code, Ollama Cloud API key, Copilot token, `GROK_BEARER_TOKEN`). Ollama Cloud accepts `TOKEN_MONITOR_OLLAMA_API_KEY` (or `OLLAMA_API_KEY`); add `ollama` to the provider allowlist if you opt in. Cookie, CLI, and desktop-login providers (Claude/Codex CLI, Cursor, Antigravity, Trae, Alibaba, Ollama cookie mode, Qoder, Zed, Command Code, WorkBuddy on Linux) stay on the widget.
 
 Hub Limits keep the freshest **valid** row per account (usage **adds**). Allowlist providers, put their keys in `compose/.env`, and turn the same ones off on the widget. Compose defaults to `${TOKEN_MONITOR_LIMITS_ENABLED:-0}`, so setting `TOKEN_MONITOR_LIMITS_ENABLED=1` in `compose/.env` takes effect without being overridden.
 
@@ -96,7 +96,7 @@ Commented copy with more keys is in `.env.example`. The complete list lives in T
 
 Copy `.env.example` to `compose/.env` next to the compose file. Precedence matches upstream: CLI flag → env → image default.
 
-- **Timezone**: Set `TZ` in `compose/.env` (e.g. `TZ=Asia/Shanghai`, default `UTC`) to match the timezone where Hermes writes logs. The log parser converts wall-clock log timestamps using the container's local timezone before daily bucketing; changing the report timezone on the dashboard cannot correct misattributed hours.
+- **Timezone**: Set `TZ` in `compose/.env` (e.g. `TZ=Asia/Shanghai`, default `UTC`) to match the timezone where Hermes writes logs. The log parser interprets wall-clock log timestamps in that timezone, and the collector explicitly passes its system timezone to Tokscale for usage periods and daily graphs. Set it before starting the service and recreate the container after changing `TZ`; changing the dashboard timezone cannot correct the device's buckets. The collector performs a full rescan when it observes a new timezone and retains daily history separately by timezone. Previously saved history is preserved as recorded, not automatically repaired.
 - **Collection cadence**: The image defaults to periodic collection with `TOKEN_MONITOR_WATCH=0` and `TOKEN_MONITOR_INTERVAL_MS=300000` (five-minute usage upload cadence). For seconds-level freshness you can opt in with `TOKEN_MONITOR_WATCH=1`; `TOKEN_MONITOR_WATCH_POLLING=1` only selects a polling watcher and does not cap Hub uploads, so an active SQLite database can generate one request per filesystem event.
 - **Session titles**: `TOKEN_MONITOR_SYNC_SESSION_TITLES=0` keeps title sync off by default. A newer Hub caches OFF for the process lifetime; an older Hub without capability endpoints still completes usage sync but may repeat capability GET checks.
 - **Outbound proxy**: If the host cannot reach the Hub on the default route, set `HTTP_PROXY` / `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node `fetch` ignores proxy env without that flag). The full variable list is in Token Monitor’s [configuration reference](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md).
@@ -106,7 +106,7 @@ Copy `.env.example` to `compose/.env` next to the compose file. Precedence match
 - **Stable-only releases**: This overlay packages official stable Releases from `Javis603/token-monitor` tracked in `upstream.lock.json`. It does not follow unreleased `main` or prereleases. `npm ci` preserves upstream's locked dependencies; rebuilding the same release does not pick up newer dependency security fixes. Follow the next fixed stable release, or review an exception separately.
 - **Local build and smoke test**:
   1. Build the image locally: `docker buildx build --platform linux/amd64 --load -t token-monitor-agent:local .`
-  2. Run `python3 .github/scripts/smoke_image.py token-monitor-agent:local`. It uses synthetic SQLite data with no network access to check the real agent, token buckets, profile discovery, and daily attribution. CI runs this gate before publishing.
+  2. Run `python3 .github/scripts/smoke_image.py token-monitor-agent:local`. It uses synthetic SQLite data with no network access to check the real agent, token buckets, profile discovery, and daily attribution. A separate fixed-clock probe exercises the image's collector persistence, restart reuse, and retained timezone calendars with injected scanner results. CI runs this gate before publishing.
 - **Registry verification**:
   Automated checks confirm that the registry (GHCR) publishes all three tags (`vX.Y.Z`, `latest`, `overlay-<sha>`) and verify that all three tags resolve to the same image artifact. If tags are missing or inconsistent, publication is retried.
 

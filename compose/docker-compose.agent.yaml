@@ -6,7 +6,7 @@
 
 services:
   token-monitor-agent:
-    image: ghcr.io/agathonli/token-monitor-agent:v0.77.0
+    image: ghcr.io/agathonli/token-monitor-agent:v0.89.0
     user: "1000:1000"
     restart: unless-stopped
     env_file:

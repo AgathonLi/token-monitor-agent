@@ -34,7 +34,7 @@ Dockerfile 按 `upstream.lock.json` 里的 tag 浅克隆 `Javis603/token-monitor
 
 | 标签 | 含义 |
 |---|---|
-| `v0.77.0` | 上游版本示例 — compose 中固定经过验证的 Release |
+| `v0.89.0` | 上游版本示例 — compose 中固定经过验证的 Release |
 | `latest` | 本包装层已构建的最新稳定版 |
 | `overlay-<sha>` | 本仓库的 git 提交 |
 
@@ -73,13 +73,13 @@ SQLite 需要可写挂载，才能创建 WAL 和 `-shm`。将完整的 Hermes �
 
 新版 Tokscale / Token Monitor 解析器支持基于每个数据库旁边的 `logs/agent.log*`（包括 `$HERMES_HOME/profiles/*/` 下的 profile 数据库与其日志），按实际 API 调用日期拆分多日会话用量。SQLite 数据库依然是权威总量：仅有日志覆盖的部分按调用日期拆分，未被日志覆盖的剩余用量仍归属到 `started_at`，日志量超报时整体回退到数据库记录。这显著改善了跨午夜归属，但不能承诺完全修复所有历史会话。
 
-pid 与归档请放到单独的独立 rw 卷（`TOKEN_MONITOR_SHARED_DIR`，如 `/var/lib/token-monitor-agent`），与 Hermes 数据目录分开。
+pid 与归档请放到单独的独立 rw 卷（`TOKEN_MONITOR_SHARED_DIR`，如 `/var/lib/token-monitor-agent`），与 Hermes 数据目录分开。升级或更改时区时保留此卷，以便采集器继续使用已保存的历史。
 
 ## 额度（Limits）
 
 这个镜像跑的就是官方无头采集器，Limits 探针都在。包装层默认 `TOKEN_MONITOR_LIMITS_ENABLED=0`：Hermes 没有 Limits 提供方，采集 `$HERMES_HOME/state.db` 只填 **Token 用量**。
 
-24/7 容器适合用 **静态 API key** 去刷额度（OpenRouter、DeepSeek、Minimax Token Plan、Volcengine、GLM / Z.ai、Kimi Code、Copilot token、`GROK_BEARER_TOKEN`）。Cookie、CLI、桌面登录类（Claude/Codex CLI、Cursor、Antigravity、Trae、Alibaba、Ollama、Qoder、Zed、Command Code，以及 Linux 上的 WorkBuddy）留在小部件。
+24/7 容器适合用 **静态 API key** 去刷额度（OpenRouter、DeepSeek、Minimax Token Plan、Volcengine、GLM / Z.ai、Kimi Code、Ollama Cloud API key、Copilot token、`GROK_BEARER_TOKEN`）。Ollama Cloud 使用 `TOKEN_MONITOR_OLLAMA_API_KEY`（或 `OLLAMA_API_KEY`）；选择启用时，在提供方 allowlist 中加入 `ollama`。Cookie、CLI、桌面登录类（Claude/Codex CLI、Cursor、Antigravity、Trae、Alibaba、Ollama Cookie 模式、Qoder、Zed、Command Code，以及 Linux 上的 WorkBuddy）留在小部件。
 
 Hub 对额度按账号保留最新一条有效记录（用量是加总）。请 allowlist 提供方、把 key 放进 `compose/.env`，并在小部件里关掉同样的项。compose 默认使用了 `${TOKEN_MONITOR_LIMITS_ENABLED:-0}`，在 `compose/.env` 中配置 `TOKEN_MONITOR_LIMITS_ENABLED=1` 可直接生效，不会被 compose 硬编码覆盖。
 
@@ -96,7 +96,7 @@ DEEPSEEK_API_KEY=
 
 把 `.env.example` 复制为 `compose/.env`（位于 compose 文件旁边）。优先级与上游一致：命令行参数 → 环境变量 → 镜像默认。
 
-- **时区**：在 `compose/.env` 中配置 `TZ`（如 `TZ=Asia/Shanghai`，默认 `UTC`），需与 Hermes 写日志的时区一致。日志解析器在归入报告日期前使用容器本地时区解析日志时间戳；在看板端修改报告时区无法纠正因本地时区偏差导致的解析错误。
+- **时区**：在 `compose/.env` 中配置 `TZ`（如 `TZ=Asia/Shanghai`，默认 `UTC`），需与 Hermes 写日志的时区一致。日志解析器按该时区解释日志时间戳，采集器也会将系统时区显式传给 Tokscale，用于用量周期和每日图表。请在启动前配置；修改 `TZ` 后需重新创建容器，仅修改看板时区无法纠正设备端的分桶。采集器观察到新时区后会全量重扫，并按时区分别保留每日历史；已保存的历史保留原记录，不会自动修复。
 - **采集节奏**：镜像默认按周期采集：`TOKEN_MONITOR_WATCH=0`、`TOKEN_MONITOR_INTERVAL_MS=300000`（五分钟用量上传周期）。若确实需要秒级更新，可以自行改为 `TOKEN_MONITOR_WATCH=1`；`TOKEN_MONITOR_WATCH_POLLING=1` 只是在轮询方式下监听文件，并不会限制 Hub 上传频率，活跃的 SQLite 数据库可能每次文件变化都产生一次请求。
 - **会话标题**：`TOKEN_MONITOR_SYNC_SESSION_TITLES=0` 默认关闭会话标题同步。新版 Hub 成功协商后会在进程生命周期内缓存 OFF 状态；未支持能力接口的旧版 Hub 仍可完成基本用量同步，但可能在后续上传时重复进行能力 GET 探测。
 - **出站代理**：若主机默认路由到不了 Hub，设置 `HTTP_PROXY` / `HTTPS_PROXY`，并加上 `NODE_USE_ENV_PROXY=1`（没有这面旗，Node 的 `fetch` 不走代理）。完整变量列表见 Token Monitor 的[设置参考](https://github.com/Javis603/token-monitor/blob/main/docs/configuration.md)。
@@ -106,7 +106,7 @@ DEEPSEEK_API_KEY=
 - **只跟稳定版**：本包装层仅跟随 `upstream.lock.json` 中记录的 `Javis603/token-monitor` 官方稳定 Release，不追踪未发布的 `main` 分支或 prerelease。`npm ci` 保留上游锁定的依赖，重建同一版本不会自动获得新的依赖安全修复；应跟进包含修复的下一稳定版，或单独审核例外补丁。
 - **本地构建与冒烟测试**：
   1. 本地构建镜像：`docker buildx build --platform linux/amd64 --load -t token-monitor-agent:local .`
-  2. 运行 `python3 .github/scripts/smoke_image.py token-monitor-agent:local`。脚本使用合成 SQLite 数据、禁用网络，检查真实 agent、Token 分桶、profile 发现及日归属；CI 在发布前执行同一验收。
+  2. 运行 `python3 .github/scripts/smoke_image.py token-monitor-agent:local`。脚本使用合成 SQLite 数据、禁用网络，检查真实 agent、Token 分桶、profile 发现及日归属；另用固定时钟与注入的扫描结果，验证镜像内采集器的持久化、重启复用及多时区历史保留。CI 在发布前执行同一验收。
 - **Registry 发布验证**：
   CI 自动检测 GHCR 注册表已发布的三个标签（`vX.Y.Z`、`latest`、`overlay-<sha>`），确认三标签对应同一镜像。若检测失败或标签不一致，则触发重试。
 

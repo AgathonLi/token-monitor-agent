@@ -129,6 +129,20 @@ class SmokeImageTests(unittest.TestCase):
         self.assertIn(image, cmd)
         self.assertEqual(cmd[-1], "/tmp/overlay-smoke.js")
 
+    def test_build_docker_run_command_propagates_no_host_env(self):
+        """The gate must not forward host environment into the container."""
+        cmd = smoke_image.build_docker_run_command(
+            "token-monitor-agent:smoke", "/path/to/smoke_agent.js", "tm-smoke-env-123"
+        )
+        self.assertFalse(
+            [arg for arg in cmd if arg in ("-e", "--env", "--env-file")
+             or arg.startswith(("-e=", "--env=", "--env-file="))],
+            "docker run must not forward host environment variables",
+        )
+        mounts = [cmd[i + 1] for i, arg in enumerate(cmd) if arg in ("-v", "--volume")]
+        self.assertEqual(len(mounts), 1, f"expected exactly one read-only mount, got {mounts}")
+        self.assertTrue(mounts[0].endswith(":/tmp/overlay-smoke.js:ro"))
+
     @patch("subprocess.run")
     def test_verify_image_metadata_success(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(VALID_INSPECT), stderr="")
