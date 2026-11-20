@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "source": "Javis603/token-monitor",
-  "tag": "v0.93.1",
-  "version": "0.93.1",
-  "commit": "55cd6bfb0e404cac25ac2ba5590c8a82ca16acbb",
-  "publishedAt": "2026-11-16T00:54:50Z",
-  "tarballUrl": "https://api.github.com/repos/Javis603/token-monitor/tarball/v0.93.1",
-  "htmlUrl": "https://github.com/Javis603/token-monitor/releases/tag/v0.93.1",
+  "tag": "v0.94.0",
+  "version": "0.94.0",
+  "commit": "5888563c2bc76c02bb3b6e74073daa000d7c1c47",
+  "publishedAt": "2026-11-19T17:08:27Z",
+  "tarballUrl": "https://api.github.com/repos/Javis603/token-monitor/tarball/v0.94.0",
+  "htmlUrl": "https://github.com/Javis603/token-monitor/releases/tag/v0.94.0",
   "prerelease": false
 }
